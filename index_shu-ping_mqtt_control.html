@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>修平科技大學智慧車輛系小車控制</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    :root { --bg:#0b1220; --card:#121a2b; --txt:#e9eefc; --muted:#9fb0d7; --accent:#4da3ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans TC", Helvetica, Arial; background:linear-gradient(180deg, #0b1220, #0f1530); color:var(--txt); }
+    header { padding:20px; text-align:center; }
+    h1 { margin:0 0 6px; font-size:22px; }
+    .container { max-width:980px; margin:0 auto; padding:12px; display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+    .card { background:var(--card); border:1px solid #223055; border-radius:16px; padding:14px; box-shadow: 0 10px 24px rgba(0,0,0,.25); }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    label { font-size:12px; color:var(--muted); }
+    input { background:#0b1330; color:var(--txt); border:1px solid #2b3b66; border-radius:10px; padding:8px 10px; outline:none; }
+    button { cursor:pointer; border:1px solid #2b3b66; background:#0c1840; color:#var(--txt); padding:10px 14px; border-radius:12px; font-weight:600; transition:.15s transform ease, .15s background ease; }
+    button:hover{ background:#12235f; }
+    button:active{ transform: translateY(1px) scale(0.99); }
+    button.primary{ background: linear-gradient(180deg, #1a56ff, #1748cc); border-color:#1748cc; }
+    button.danger{ background: linear-gradient(180deg, #b71c1c, #8b1212); border-color:#8b1212; }
+    .status { font-size:12px; color:var(--muted); margin-left:auto; display:flex; align-items:center; gap:8px; }
+    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; background:#555; }
+    .dot.ok{ background:#29d398; }
+    .dot.warn{ background:#ffcd29; }
+    .dot.err{ background:#ff5e57; }
+    .grid { display:grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 90px); gap:12px; }
+    .pad { background:#0c1840; border:1px dashed #2b3b66; border-radius:16px; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:18px; letter-spacing:2px; color:#cfe0ff; }
+    .pad span.small { font-size:12px; font-weight:600; color:#9fb0d7; display:block; margin-top:4px; letter-spacing:0; }
+    .pad button { width:100%; height:100%; background:transparent; border:0; color:inherit; font:inherit; cursor:pointer; border-radius:16px; }
+    .grid .empty { visibility:hidden; }
+    .log { height:300px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background:#0b1330; border:1px solid #2b3b66; border-radius:12px; padding:10px; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; background:#0b1330; border:1px solid #2b3b66; padding:2px 6px; border-radius:6px; }
+    @media (max-width: 900px){ .container{ grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>修平科技大學智慧車輛系小車控制</h1>
+    <div class="row" style="justify-content:center; gap:8px;">
+      <span>Broker：<span class="kbd">wss://broker.mqttgo.io:8084/mqtt</span> ｜ 快捷鍵：數字鍵 <span class="kbd">1~8</span>、方向鍵 <span class="kbd">↑=1 →=2 ↓=3 ←=4</span></span>
+      <button id="btnConnect" class="primary">連線</button>
+      <button id="btnDisconnect" class="danger" disabled>斷線</button>
+      <div class="status" id="status"><span class="dot" id="dot"></span><span id="statusText">未連線</span></div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 左：主題設定 + 監看 + 日誌 -->
+    <section class="card">
+      <div class="row" style="gap:12px; margin-bottom:10px;">
+        <label>發佈主題</label>
+        <input id="pubTopic" value="shunliang/motor" style="flex:1; min-width:260px;" />
+      </div>
+      <div class="row" style="gap:12px; margin-bottom:10px;">
+        <label>監看主題（逗號分隔可多個）</label>
+        <input id="subTopics" placeholder="例如：shunliang/motor, demo/echo" style="flex:1; min-width:320px;" />
+        <button id="btnSubscribe">訂閱</button>
+        <button id="btnUnsubscribe">退訂</button>
+      </div>
+      <div id="subList" style="margin:4px 0 8px; color:var(--muted);"></div>
+      <div class="log" id="log"></div>
+    </section>
+
+    <!-- 右：8 方向按鈕（長按連發 + 放開送 0） -->
+    <section class="card">
+      <div class="grid">
+        <div class="pad"><button data-payload="7" title="左前 (7)">左前<br><span class="small">payload: 7</span></button></div>
+        <div class="pad"><button data-payload="1" title="前 (1 / ↑)">前<br><span class="small">payload: 1</span></button></div>
+        <div class="pad"><button data-payload="5" title="右前 (5)">右前<br><span class="small">payload: 5</span></button></div>
+        <div class="pad"><button data-payload="4" title="左 (4 / ←)">左<br><span class="small">payload: 4</span></button></div>
+        <div class="pad empty"></div>
+        <div class="pad"><button data-payload="2" title="右 (2 / →)">右<br><span class="small">payload: 2</span></button></div>
+        <div class="pad"><button data-payload="8" title="左後 (8)">左後<br><span class="small">payload: 8</span></button></div>
+        <div class="pad"><button data-payload="3" title="後 (3 / ↓)">後<br><span class="small">payload: 3</span></button></div>
+        <div class="pad"><button data-payload="6" title="右後 (6)">右後<br><span class="small">payload: 6</span></button></div>
+      </div>
+      <div style="margin-top:10px; font-size:12px; color:var(--muted);">說明：按住會連發，<b>放開自動送 0</b>；鍵盤也支援。</div>
+    </section>
+  </main>
+
+  <script>
+    // ------- 小工具 -------
+    const $ = (sel) => document.querySelector(sel);
+    const logEl = $('#log');
+    function log(msg){
+      const time = new Date().toLocaleTimeString();
+      logEl.innerHTML = `[${time}] ${msg}<br>` + logEl.innerHTML;
+    }
+    function setStatus(text, state){
+      $('#statusText').textContent = text;
+      const dot = $('#dot');
+      dot.className = 'dot ' + (state||'');
+    }
+    function vibrateOk(){ if(navigator.vibrate){ try{ navigator.vibrate(30); }catch(e){} } }
+
+    // ------- 連線控制（手動） -------
+    const WS_URL = 'wss://broker.mqttgo.io:8084/mqtt';
+    let client = null;
+
+    function bindClientEvents(){
+      client.on('connect', () => { setStatus('已連線','ok'); $('#btnDisconnect').disabled = false; log('✔ 已連線'); });
+      client.on('reconnect', () => { setStatus('重連中…','warn'); });
+      client.on('close', () => { setStatus('未連線',''); $('#btnDisconnect').disabled = true; log('✖ 連線關閉'); });
+      client.on('error', (err) => { setStatus('錯誤','err'); log('❗ 錯誤：' + err.message); });
+      client.on('message', (topic, payload) => { log(`← [${topic}] ${payload}`); });
+    }
+
+    function connect(){
+      if(client){ try{ client.end(true); }catch(e){} }
+      const clientId = `web-${Math.random().toString(16).slice(2,8)}-${Date.now().toString().slice(-4)}`;
+      setStatus('連線中…','warn');
+      log(`Connecting to ${WS_URL} (clientId=${clientId})`);
+      client = mqtt.connect(WS_URL, { clientId, clean: true, keepalive: 60, reconnectPeriod: 1000, connectTimeout: 10_000 });
+      bindClientEvents();
+    }
+
+    function disconnect(){ if(client){ client.end(true); client = null; setStatus('未連線',''); log('✖ 手動斷線'); } }
+
+    $('#btnConnect').addEventListener('click', connect);
+    $('#btnDisconnect').addEventListener('click', disconnect);
+
+    // ------- 訂閱/退訂（多主題） -------
+    const subSet = new Set();
+    function renderSubList(){ $('#subList').textContent = '已訂閱：' + (subSet.size ? Array.from(subSet).join(', ') : '（無）'); }
+    function parseTopics(){ const raw = $('#subTopics').value.trim(); return raw? raw.split(',').map(s=>s.trim()).filter(Boolean): []; }
+
+    $('#btnSubscribe').addEventListener('click', () => {
+      if(!client || !client.connected){ return log('請先連線'); }
+      const topics = parseTopics(); if(topics.length===0) return;
+      client.subscribe(topics.map(t=>({ topic:t, qos:0 })), (err, granted) => {
+        if(err) return log('訂閱失敗：' + err.message);
+        granted.forEach(g=> subSet.add(g.topic)); renderSubList(); log('✔ 已訂閱：' + topics.join(', '));
+      });
+    });
+
+    $('#btnUnsubscribe').addEventListener('click', () => {
+      if(!client || !client.connected){ return log('請先連線'); }
+      const topics = parseTopics(); if(topics.length===0) return;
+      client.unsubscribe(topics, (err) => {
+        if(err) return log('退訂失敗：' + err.message);
+        topics.forEach(t=> subSet.delete(t)); renderSubList(); log('✔ 已退訂：' + topics.join(', '));
+      });
+    });
+
+    // ------- 發佈 -------
+    function publishPayload(payload){
+      if(!client || !client.connected){ return log('請先連線'); }
+      const topic = $('#pubTopic').value.trim(); if(!topic){ return log('請先輸入發佈主題'); }
+      client.publish(topic, String(payload), { qos:0, retain:false }, (err) => {
+        if(err) return log('發佈失敗：' + err.message);
+        log(`→ 發佈 [${topic}] ${payload}`); vibrateOk();
+      });
+    }
+
+    // ------- 長按連發 + 放開送 0 -------
+    let repeatTimer = null; const REPEAT_MS = 120;
+    function startRepeat(payload){ stopRepeat(false); publishPayload(payload); repeatTimer = setInterval(() => publishPayload(payload), REPEAT_MS); }
+    function stopRepeat(sendZero=true){ if(repeatTimer){ clearInterval(repeatTimer); repeatTimer = null; } if(sendZero) publishPayload('0'); }
+
+    document.querySelectorAll('.pad button').forEach(btn => {
+      const payload = btn.dataset.payload;
+      // 滑鼠
+      btn.addEventListener('mousedown', (e) => { e.preventDefault(); startRepeat(payload); });
+      btn.addEventListener('mouseup',   ()  => { stopRepeat(true); });
+      btn.addEventListener('mouseleave',()  => { stopRepeat(true); });
+      // 觸控
+      btn.addEventListener('touchstart', (e) => { e.preventDefault(); startRepeat(payload); }, { passive:false });
+      btn.addEventListener('touchend',   ()  => { stopRepeat(true); });
+      btn.addEventListener('touchcancel',()  => { stopRepeat(true); });
+    });
+
+    // 鍵盤：按住連發、放開送 0
+    const keyMap = { 'ArrowUp':'1','ArrowRight':'2','ArrowDown':'3','ArrowLeft':'4','Digit1':'1','Numpad1':'1','Digit2':'2','Numpad2':'2','Digit3':'3','Numpad3':'3','Digit4':'4','Numpad4':'4','Digit5':'5','Numpad5':'5','Digit6':'6','Numpad6':'6','Digit7':'7','Numpad7':'7','Digit8':'8','Numpad8':'8' };
+    let keyHolding = false;
+    window.addEventListener('keydown', (e) => { const p = keyMap[e.code]; if(!p) return; if(keyHolding){ e.preventDefault(); return; } e.preventDefault(); keyHolding = true; startRepeat(p); });
+    window.addEventListener('keyup', (e) => { const p = keyMap[e.code]; if(!p) return; e.preventDefault(); keyHolding = false; stopRepeat(true); });
+  </script>
+</body>
+</html>
